@@ -53,40 +53,50 @@ class Trainer:
         self.optimizer = optim.Adam(model.parameters(), lr=lr)
         self.criterion = nn.MSELoss()
 
-    def forward_model(self, x):
+    def forward_model(self, x, y=None):
+        """모델 추론 + 출력 길이 자동 맞춤"""
         out = self.model(x)
-        return out[0], out[1] if isinstance(out, tuple) else (out, torch.zeros_like(out))
+        pred = out[0] if isinstance(out, tuple) else out
+        uncertainty = out[1] if isinstance(out, tuple) and len(out) > 1 else torch.zeros_like(pred)
+
+        if y is not None and pred.shape[-1] != y.shape[-1]:
+            min_len = min(pred.shape[-1], y.shape[-1])
+            pred = pred[..., :min_len]
+            y = y[..., :min_len]
+            return pred, uncertainty, y
+
+        return pred, uncertainty, y
 
     def train_epoch(self, loader):
         self.model.train()
-        total = 0
+        total_loss = 0
         for x, y in loader:
             x, y = x.to(device), y.to(device)
             self.optimizer.zero_grad()
-            pred, _ = self.forward_model(x)
+            pred, _, y = self.forward_model(x, y)
             loss = self.criterion(pred, y)
             loss.backward()
             self.optimizer.step()
-            total += loss.item()
-        return total / len(loader)
+            total_loss += loss.item()
+        return total_loss / len(loader)
 
     def validate(self, loader):
         self.model.eval()
-        total = 0
+        total_loss = 0
         with torch.no_grad():
             for x, y in loader:
                 x, y = x.to(device), y.to(device)
-                pred, _ = self.forward_model(x)
+                pred, _, y = self.forward_model(x, y)
                 loss = self.criterion(pred, y)
-                total += loss.item()
-        return total / len(loader)
+                total_loss += loss.item()
+        return total_loss / len(loader)
 
     def test_and_evaluate(self, loader):
         self.model.eval()
         with torch.no_grad():
             for x, y in loader:
                 x, y = x.to(device), y.to(device)
-                pred, _ = self.forward_model(x)
+                pred, _, y = self.forward_model(x, y)
                 return evaluate_scores(pred, y)
 
     def train(self, train_loader, val_loader, test_loader, model_name, epochs=5):
@@ -94,14 +104,15 @@ class Trainer:
             train_loss = self.train_epoch(train_loader)
             val_loss = self.validate(val_loader)
             print(f"[{model_name}] Epoch {epoch} | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
-        
-        # Save model
+
+        # 저장
         torch.save(self.model.state_dict(), f"checkpoints/{model_name}.pt")
 
-        # Evaluate
+        # 테스트 및 평가
         scores = self.test_and_evaluate(test_loader)
         print(f"[{model_name}] Evaluation Scores: {scores}")
         return scores
+
 
 # ==== 데이터 로딩 ====
 def load_datasets(base_dir="./dataset", seq_len=1000, batch_size=16):
