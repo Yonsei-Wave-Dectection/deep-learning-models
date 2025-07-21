@@ -298,7 +298,7 @@ def run_unet1d_experiment(data_dict, batch_size=32, epochs=100, learning_rate=0.
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
     
-    model = UNet1D(in_channels=1, out_channels=1, dropout_p=0.1)
+    model = UNet1D(in_channels=16, out_channels=1, dropout_p=0.1)
     trainer = UNet1DTrainer(model, device)
     
     # 학습
