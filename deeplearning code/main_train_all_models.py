@@ -5,8 +5,12 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from sklearn.metrics import accuracy_score, f1_score
 import pandas as pd
+import numpy as np
+import pytz
+from glob import glob
+from datetime import datetime
 
-# ==== 모델 임포트 ====
+# 모델 임포트
 from Autoformer import Autoformer
 from BiLSTM import BiLSTMDenoiser
 from DeNoising_Autoencoder import DenoisingAutoencoder, VariationalAutoencoder
@@ -18,12 +22,42 @@ from WaveNet import WaveNet
 from UNet1D import UNet1D
 from common_data_processing import SeismicDataset, SeismicDataLoader
 
-# ==== 디바이스 및 경로 설정 ====
+# 디바이스 및 경로 설정
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 os.makedirs("checkpoints", exist_ok=True)
 os.makedirs("logs", exist_ok=True)
+os.makedirs("./dataset/train", exist_ok=True)
+os.makedirs("./dataset/val", exist_ok=True)
+os.makedirs("./dataset/test", exist_ok=True)
 
-# ==== 평가 함수 ====
+# 전처리 함수
+def preprocess_mseed_files(data_dir, output_dir):
+    import obspy
+    kst = pytz.timezone("Asia/Seoul")
+    os.makedirs(output_dir, exist_ok=True)
+    for file_path in sorted(glob(os.path.join(data_dir, "*.mseed"))):
+        try:
+            st_raw = obspy.read(file_path)
+            st_filtered = st_raw.copy()
+            for tr in st_filtered:
+                tr.detrend(type='demean')
+                tr.taper(max_percentage=0.2, type='cosine')
+                tr.filter("bandpass", freqmin=0.1, freqmax=10.0, corners=2, zerophase=True)
+
+            for tr in st_filtered:
+                time_array_utc = tr.times("utcdatetime")
+                time_array_kst_str = [
+                    t.datetime.replace(tzinfo=pytz.utc).astimezone(kst).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+                    for t in time_array_utc
+                ]
+                output_data = np.column_stack((time_array_kst_str, tr.data))
+                filename = os.path.basename(file_path).replace(".mseed", f"_{tr.stats.channel}.csv")
+                np.savetxt(os.path.join(output_dir, filename), output_data, delimiter=",", fmt='%s', header="KST_datetime,amplitude", comments='')
+            print(f"Preprocessed: {file_path}")
+        except Exception as e:
+            print(f"Error processing {file_path}: {e}")
+
+# 평가 함수
 def evaluate_scores(pred, true, threshold=0.1):
     mse = torch.mean((pred - true) ** 2).item()
     mae = torch.mean(torch.abs(pred - true)).item()
@@ -46,7 +80,7 @@ def evaluate_scores(pred, true, threshold=0.1):
         "False Negative Rate": fn / total,
     }
 
-# ==== 모델 학습 클래스 ====
+# 모델 학습 클래스
 class Trainer:
     def __init__(self, model, lr=1e-3):
         self.model = model.to(device)
@@ -54,7 +88,6 @@ class Trainer:
         self.criterion = nn.MSELoss()
 
     def forward_model(self, x, y=None):
-        """모델 추론 + 출력 길이 자동 맞춤"""
         out = self.model(x)
         pred = out[0] if isinstance(out, tuple) else out
         uncertainty = out[1] if isinstance(out, tuple) and len(out) > 1 else torch.zeros_like(pred)
@@ -105,16 +138,12 @@ class Trainer:
             val_loss = self.validate(val_loader)
             print(f"[{model_name}] Epoch {epoch} | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
 
-        # 저장
         torch.save(self.model.state_dict(), f"checkpoints/{model_name}.pt")
-
-        # 테스트 및 평가
         scores = self.test_and_evaluate(test_loader)
         print(f"[{model_name}] Evaluation Scores: {scores}")
         return scores
 
-
-# ==== 데이터 로딩 ====
+# 데이터 로딩
 def load_datasets(base_dir="./dataset", seq_len=1000, batch_size=16):
     loaders = {}
     for split in ["train", "val", "test"]:
@@ -126,9 +155,7 @@ def load_datasets(base_dir="./dataset", seq_len=1000, batch_size=16):
         loaders[split] = DataLoader(dataset, batch_size=batch_size, shuffle=(split == "train"))
     return loaders["train"], loaders["val"], loaders["test"]
 
-# ==== 모델 리스트 정의 ====
-
-### 님들은 이 부분만 수정하면 됨. 
+# 모델 리스트 정의
 models = {
     "Autoformer": Autoformer(),
     "BiLSTM": BiLSTMDenoiser(),
@@ -142,8 +169,9 @@ models = {
     "UNet1D": UNet1D(),
 }
 
-# ==== 전체 실행 ====
+# 전체 실행
 if __name__ == "__main__":
+    preprocess_mseed_files("./raw_mseed", "./dataset/train")
     train_loader, val_loader, test_loader = load_datasets()
     results = {}
 
@@ -153,8 +181,6 @@ if __name__ == "__main__":
         scores = trainer.train(train_loader, val_loader, test_loader, model_name=name, epochs=20)
         results[name] = scores
 
-    # 전체 결과 저장
     df = pd.DataFrame(results).T
     df.to_csv("logs/final_evaluation_results.csv")
     print("\n전체 결과 요약:\n", df)
-
