@@ -150,7 +150,7 @@ if __name__ == "__main__":
     for name, model in models.items():
         print(f"\n시작: {name}")
         trainer = Trainer(model)
-        scores = trainer.train(train_loader, val_loader, test_loader, model_name=name, epochs=5)
+        scores = trainer.train(train_loader, val_loader, test_loader, model_name=name, epochs=20)
         results[name] = scores
 
     # 전체 결과 저장
