@@ -188,6 +188,7 @@ class PatchTST(nn.Module):
         # Global uncertainty context
         self.global_uncertainty = nn.Sequential(
             nn.AdaptiveAvgPool1d(1),
+            nn.Flatten(1), 
             nn.Linear(d_model, d_model // 4),
             nn.GELU(),
             nn.Linear(d_model // 4, 1),
@@ -217,7 +218,7 @@ class PatchTST(nn.Module):
         
         # Global uncertainty context
         global_context = self.global_uncertainty(patch_embeddings.transpose(1, 2))  # (batch_size, 1, 1)
-        global_context = global_context.squeeze(-1).unsqueeze(-1)  # (batch_size, 1, 1)
+        global_context = global_context.unsqueeze(2)  # (batch_size, 1, 1)
         
         # Apply global context to uncertainties
         patch_uncertainties = patch_uncertainties * global_context
